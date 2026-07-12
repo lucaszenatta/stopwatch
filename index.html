@@ -20,34 +20,27 @@
     width: 100vw;
     box-sizing: border-box;
   }
-  #display {
+  /* Digital (regular numerals) display */
+  #digitalDisplay {
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.05em;
     white-space: nowrap;
     line-height: 1;
     user-select: none;
   }
-  /* 7-segment look: rely on a seven-seg webfont with graceful fallback */
-  .sevenSegment {
-    font-family: 'DSEG7Classic', 'DSEG7 Classic', monospace;
+  /* SVG seven-segment display fills available space */
+  #segmentDisplay {
+    width: 90vw;
+    height: 60vh;
+    user-select: none;
   }
-  /* faint "off" segments behind the lit ones for authentic LCD feel */
-  #segmentBackdrop {
-    position: absolute;
-    opacity: 0.12;
-    pointer-events: none;
-  }
+  .hidden { display: none !important; }
 </style>
-<!-- DSEG 7-segment webfont, only fetched when needed -->
-<link id="segFont" rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css">
 </head>
 <body>
   <div id="stopwatchContainer">
-    <div id="displayWrapper" style="position:relative;">
-      <div id="segmentBackdrop"></div>
-      <div id="display"></div>
-    </div>
+    <div id="digitalDisplay" class="hidden"></div>
+    <svg id="segmentDisplay" class="hidden" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
 
 <script>
@@ -64,69 +57,36 @@
     return Number.isFinite(value) ? value : fallback;
   }
 
-  const startFrom = getInt("startFrom", 0); // seconds already elapsed
+  const startFrom = getInt("startFrom", 0);
   const displayTypeRaw = params.get("displayType") || "hours,minutes,seconds";
   const displayType = displayTypeRaw
     .split(",")
     .map(s => s.trim().toLowerCase())
     .filter(Boolean);
 
-  // startTime: unix epoch (seconds). Default = load time.
   const startTimeParam = getInt("startTime", null);
   const displayStyle = (params.get("displayStyle") || "digital").toLowerCase();
-  const displayFont = params.get("displayFont"); // may be null
+  const displayFont = params.get("displayFont");
   const backgroundColor = params.get("backgroundColor") || "#000000";
   const color = params.get("color") || "#ffffff";
 
-  // ---- Establish the reference epoch (in ms) ----
-  // We anchor to a wall-clock epoch so the count stays correct even if the
-  // tab is backgrounded, throttled, or the iframe re-renders.
+  // ---- Reference epoch (ms) ----
   const nowMs = Date.now();
-  const anchorMs = (startTimeParam !== null)
-    ? (startTimeParam * 1000)          // count from the given epoch
-    : nowMs;                            // count from load
-  // startFrom shifts the baseline earlier so we appear already elapsed.
+  const anchorMs = (startTimeParam !== null) ? (startTimeParam * 1000) : nowMs;
   const baselineMs = anchorMs - (startFrom * 1000);
 
-  // ---- Apply styling ----
+  // ---- Elements & styling ----
   const bodyEl = document.body;
   const containerEl = document.getElementById("stopwatchContainer");
-  const displayEl = document.getElementById("display");
-  const backdropEl = document.getElementById("segmentBackdrop");
-  const wrapperEl = document.getElementById("displayWrapper");
+  const digitalEl = document.getElementById("digitalDisplay");
+  const svgEl = document.getElementById("segmentDisplay");
 
   bodyEl.style.backgroundColor = backgroundColor;
   containerEl.style.backgroundColor = backgroundColor;
-  displayEl.style.color = color;
 
   const useSevenSegment = (displayStyle === "7-segment" || displayStyle === "7segment");
 
-  if (useSevenSegment) {
-    displayEl.classList.add("sevenSegment");
-    backdropEl.classList.add("sevenSegment");
-    backdropEl.style.color = color; // "off" segments in same hue, low opacity
-  } else {
-    // digital / regular numerals
-    displayEl.style.fontFamily = displayFont
-      ? (displayFont + ", monospace")
-      : "monospace";
-    // no backdrop for digital
-  }
-
-  // Responsive font sizing based on viewport
-  function sizeFont() {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    // approximate: fit width, characters ~0.6em wide
-    const charCount = Math.max(displayEl.textContent.length, 6);
-    const byWidth = (vw * 0.9) / (charCount * 0.62);
-    const byHeight = vh * 0.6;
-    const fontSize = Math.max(12, Math.min(byWidth, byHeight));
-    displayEl.style.fontSize = fontSize + "px";
-    backdropEl.style.fontSize = fontSize + "px";
-  }
-
-  // ---- Formatting ----
+  // ---- Unit flags ----
   const wantDays = displayType.includes("days");
   const wantHours = displayType.includes("hours");
   const wantMinutes = displayType.includes("minutes");
@@ -140,16 +100,8 @@
     return s;
   }
 
-  // Build the mask string used for the "off" seven-seg backdrop:
-  // every digit becomes 8, colon stays colon.
-  function buildBackdrop(text) {
-    return text.replace(/[0-9]/g, "8");
-  }
-
   function formatElapsed(totalMs) {
     if (totalMs < 0) totalMs = 0;
-
-    let remainderMs = totalMs;
 
     const msPerDay = 86400000;
     const msPerHour = 3600000;
@@ -157,52 +109,29 @@
     const msPerSecond = 1000;
 
     let days = 0, hours = 0, minutes = 0, seconds = 0, millis = 0;
+    let r = totalMs;
 
+    // Highest enabled unit absorbs all overflow above it.
     if (wantDays) {
-      days = Math.floor(remainderMs / msPerDay);
-      remainderMs -= days * msPerDay;
-    }
-    if (wantHours) {
-      hours = Math.floor(remainderMs / msPerHour);
-      remainderMs -= hours * msPerHour;
-    } else if (!wantDays) {
-      // if hours not shown and days not shown, hours roll into nothing above;
-      // keep remainder as-is for lower units
-    }
-    if (wantMinutes) {
-      minutes = Math.floor(remainderMs / msPerMinute);
-      remainderMs -= minutes * msPerMinute;
-    }
-    if (wantSeconds) {
-      seconds = Math.floor(remainderMs / msPerSecond);
-      remainderMs -= seconds * msPerSecond;
-    }
-    if (wantMillis) {
-      millis = Math.floor(remainderMs);
-    }
-
-    // If a higher unit is disabled, its time overflows into the highest
-    // enabled unit so no time is silently dropped.
-    // Recompute the top-most enabled unit to absorb overflow:
-    if (!wantDays && wantHours) {
-      hours = Math.floor(totalMs / msPerHour);
-      let r = totalMs - hours * msPerHour;
-      minutes = wantMinutes ? Math.floor(r / msPerMinute) : 0;
-      r -= minutes * msPerMinute;
-      seconds = wantSeconds ? Math.floor(r / msPerSecond) : 0;
-      r -= seconds * msPerSecond;
-      millis = wantMillis ? Math.floor(r) : 0;
-    } else if (!wantDays && !wantHours && wantMinutes) {
-      minutes = Math.floor(totalMs / msPerMinute);
-      let r = totalMs - minutes * msPerMinute;
-      seconds = wantSeconds ? Math.floor(r / msPerSecond) : 0;
-      r -= seconds * msPerSecond;
-      millis = wantMillis ? Math.floor(r) : 0;
-    } else if (!wantDays && !wantHours && !wantMinutes && wantSeconds) {
-      seconds = Math.floor(totalMs / msPerSecond);
-      millis = wantMillis ? Math.floor(totalMs - seconds * msPerSecond) : 0;
-    } else if (!wantSeconds && !wantMinutes && !wantHours && !wantDays && wantMillis) {
-      millis = Math.floor(totalMs);
+      days = Math.floor(r / msPerDay); r -= days * msPerDay;
+      if (wantHours) { hours = Math.floor(r / msPerHour); r -= hours * msPerHour; }
+      if (wantMinutes) { minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute; }
+      if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
+      if (wantMillis) { millis = Math.floor(r); }
+    } else if (wantHours) {
+      hours = Math.floor(r / msPerHour); r -= hours * msPerHour;
+      if (wantMinutes) { minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute; }
+      if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
+      if (wantMillis) { millis = Math.floor(r); }
+    } else if (wantMinutes) {
+      minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute;
+      if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
+      if (wantMillis) { millis = Math.floor(r); }
+    } else if (wantSeconds) {
+      seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond;
+      if (wantMillis) { millis = Math.floor(r); }
+    } else if (wantMillis) {
+      millis = Math.floor(r);
     }
 
     const parts = [];
@@ -220,66 +149,13 @@
     return text;
   }
 
-  // ---- Render loop ----
-  // We compute elapsed from Date.now() each frame rather than incrementing a
-  // counter, so drift is impossible: the display always reflects real elapsed
-  // time even after throttling or sleep.
-  let lastText = "";
-  let rafID = null;
-
-  function tick() {
-    const elapsedMs = Date.now() - baselineMs;
-    const text = formatElapsed(elapsedMs);
-
-    if (text !== lastText) {
-      displayEl.textContent = text;
-      if (useSevenSegment) {
-        backdropEl.textContent = buildBackdrop(text);
-      }
-      // Only resize when the character count changes (cheap check).
-      if (text.length !== lastText.length) sizeFont();
-      lastText = text;
-    }
-    rafID = requestAnimationFrame(tick);
-  }
-
-  // If milliseconds are shown we want smooth ~60fps via rAF.
-  // If not, a 250ms interval is far cheaper and still updates seconds crisply.
-  function startLoop() {
-    if (wantMillis) {
-      rafID = requestAnimationFrame(tick);
-    } else {
-      // draw immediately, then poll
-      const poll = function () {
-        const elapsedMs = Date.now() - baselineMs;
-        const text = formatElapsed(elapsedMs);
-        if (text !== lastText) {
-          displayEl.textContent = text;
-          if (useSevenSegment) backdropEl.textContent = buildBackdrop(text);
-          if (text.length !== lastText.length) sizeFont();
-          lastText = text;
-        }
-      };
-      poll();
-      setInterval(poll, 250);
-    }
-  }
-
-  window.addEventListener("resize", sizeFont);
-
-  // Wait for the seven-seg font (if used) so first paint is not misaligned.
-  if (useSevenSegment && document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(function () {
-      startLoop();
-      sizeFont();
-    });
-    // Fallback in case fonts.ready never resolves
-    setTimeout(function () { if (!lastText) { startLoop(); sizeFont(); } }, 800);
-  } else {
-    startLoop();
-    sizeFont();
-  }
-})();
-</script>
-</body>
-</html>
+  // =========================================================
+  //  SEVEN-SEGMENT SVG RENDERER (no external dependencies)
+  // =========================================================
+  // Segment layout per digit:
+  //        a
+  //      -----
+  //   f |     | b
+  //     |  g  |
+  //      -----
+  //   e |     | c
