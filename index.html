@@ -503,6 +503,8 @@
     var GIFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js";
     var GIFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js";
     var gifLibLoading = null;
+    var workerBlobLoading = null;
+    var workerBlobURL = null;
 
     function loadGifLib() {
       if (window.GIF) return Promise.resolve();
@@ -517,20 +519,55 @@
       return gifLibLoading;
     }
 
+    // A Worker cannot be constructed from a cross-origin script URL, so we
+    // fetch the worker source from the CDN and wrap it in a same-origin blob
+    // URL. gif.js is then pointed at that blob. Resolves to a blob URL, or to
+    // null if the fetch fails (caller falls back to zero workers).
+    function loadWorkerBlobURL() {
+      if (workerBlobURL) return Promise.resolve(workerBlobURL);
+      if (workerBlobLoading) return workerBlobLoading;
+      workerBlobLoading = fetch(GIFJS_WORKER_URL)
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("worker fetch HTTP " + resp.status);
+          return resp.text();
+        })
+        .then(function (src) {
+          var blob = new Blob([src], { type: "application/javascript" });
+          workerBlobURL = URL.createObjectURL(blob);
+          console.log("[stopwatch] gif worker wrapped as same-origin blob");
+          return workerBlobURL;
+        })
+        .catch(function (err) {
+          console.warn("[stopwatch] worker blob unavailable, will use 0 workers:", err && err.message);
+          return null;
+        });
+      return workerBlobLoading;
+    }
+
     // Generates a GIF where frame N (0-based) shows the stopwatch at
     // (startFrom + N) seconds. One frame per second, 1000ms delay each.
     function exportGif(onProgress) {
       return loadGifLib().then(function () {
+        return loadWorkerBlobURL();
+      }).then(function (blobWorkerURL) {
         return new Promise(function (resolve, reject) {
-          var gif = new window.GIF({
-            workers: 2,
+          // Use 2 workers when we have a same-origin blob worker; otherwise
+          // fall back to 0 workers (slower, but encodes on the main thread
+          // without needing a worker script).
+          var gifOptions = {
             quality: 10,
             width: gifWidth,
             height: gifHeight,
-            workerScript: GIFJS_WORKER_URL,
             background: backgroundColor,
             repeat: 0
-          });
+          };
+          if (blobWorkerURL) {
+            gifOptions.workers = 2;
+            gifOptions.workerScript = blobWorkerURL;
+          } else {
+            gifOptions.workers = 0;
+          }
+          var gif = new window.GIF(gifOptions);
 
           var canvas = document.createElement("canvas");
           canvas.width = gifWidth;
