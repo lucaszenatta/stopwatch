@@ -33,6 +33,36 @@
     user-select: none;
   }
   .hidden { display: none !important; }
+
+  /* Export UI: only shown when export controls are enabled */
+  #exportBar {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 8px;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    color: #fff;
+    z-index: 10;
+  }
+  #exportBar button {
+    font: inherit;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    cursor: pointer;
+  }
+  #exportBar button:disabled { opacity: 0.5; cursor: default; }
+  #exportStatus { min-width: 120px; }
 </style>
 </head>
 <body>
@@ -45,8 +75,6 @@
 (function () {
   "use strict";
 
-  // Global error trap: if anything throws, we see it in the console instead
-  // of a silent blank page.
   window.addEventListener("error", function (e) {
     console.error("[stopwatch] uncaught error:", e.message, "at", e.filename + ":" + e.lineno);
   });
@@ -55,27 +83,46 @@
     console.log("[stopwatch] boot start");
 
     // ---- Parse URL parameters ----
-    const params = new URLSearchParams(window.location.search);
+    var params = new URLSearchParams(window.location.search);
 
     function getInt(key, fallback) {
-      const raw = params.get(key);
+      var raw = params.get(key);
       if (raw === null || raw === "") return fallback;
-      const value = parseInt(raw, 10);
+      var value = parseInt(raw, 10);
       return Number.isFinite(value) ? value : fallback;
     }
 
-    const startFrom = getInt("startFrom", 0);
-    const displayTypeRaw = params.get("displayType") || "hours,minutes,seconds";
-    const displayType = displayTypeRaw
+    // Accepts "790", "790px", or "790 px" -> 790
+    function getPx(key, fallback) {
+      var raw = params.get(key);
+      if (raw === null || raw === "") return fallback;
+      var value = parseInt(String(raw).replace(/px/i, "").trim(), 10);
+      return Number.isFinite(value) && value > 0 ? value : fallback;
+    }
+
+    var startFrom = getInt("startFrom", 0);
+    var displayTypeRaw = params.get("displayType") || "hours,minutes,seconds";
+    var displayType = displayTypeRaw
       .split(",")
       .map(function (s) { return s.trim().toLowerCase(); })
       .filter(Boolean);
 
-    const startTimeParam = getInt("startTime", null);
-    const displayStyle = (params.get("displayStyle") || "digital").toLowerCase();
-    const displayFont = params.get("displayFont");
-    const backgroundColor = params.get("backgroundColor") || "#000000";
-    const color = params.get("color") || "#ffffff";
+    var startTimeParam = getInt("startTime", null);
+    var displayStyle = (params.get("displayStyle") || "digital").toLowerCase();
+    var displayFont = params.get("displayFont");
+    var backgroundColor = params.get("backgroundColor") || "#000000";
+    var color = params.get("color") || "#ffffff";
+
+    // ---- New export parameters ----
+    // Default dimensions depend on how many units are displayed:
+    // 3+ units (e.g. hours,minutes,seconds) -> 790x130
+    // 2 units  (e.g. minutes,seconds / hours,minutes) -> 500x130
+    var defaultWidth = (displayType.length >= 3) ? 790 : 500;
+    var defaultHeight = 130;
+    var gifWidth = getPx("width", defaultWidth);
+    var gifHeight = getPx("height", defaultHeight);
+    var frameCount = getInt("frameCount", 900); // 900 = 15 min at 1 fps
+    if (frameCount < 1) frameCount = 1;
 
     console.log("[stopwatch] params:", {
       startFrom: startFrom,
@@ -84,42 +131,41 @@
       displayStyle: displayStyle,
       displayFont: displayFont,
       backgroundColor: backgroundColor,
-      color: color
+      color: color,
+      gifWidth: gifWidth,
+      gifHeight: gifHeight,
+      frameCount: frameCount
     });
 
-    // ---- Reference epoch (ms) ----
-    const nowMs = Date.now();
-    const anchorMs = (startTimeParam !== null) ? (startTimeParam * 1000) : nowMs;
-    const baselineMs = anchorMs - (startFrom * 1000);
+    var nowMs = Date.now();
+    var anchorMs = (startTimeParam !== null) ? (startTimeParam * 1000) : nowMs;
+    var baselineMs = anchorMs - (startFrom * 1000);
 
-    // ---- Elements ----
-    const bodyEl = document.body;
-    const containerEl = document.getElementById("stopwatchContainer");
-    const digitalEl = document.getElementById("digitalDisplay");
-    const svgEl = document.getElementById("segmentDisplay");
+    var bodyEl = document.body;
+    var containerEl = document.getElementById("stopwatchContainer");
+    var digitalEl = document.getElementById("digitalDisplay");
+    var svgEl = document.getElementById("segmentDisplay");
 
     if (!containerEl || !digitalEl || !svgEl) {
-      console.error("[stopwatch] missing DOM elements", {
-        containerEl: !!containerEl, digitalEl: !!digitalEl, svgEl: !!svgEl
-      });
+      console.error("[stopwatch] missing DOM elements");
       return;
     }
 
     bodyEl.style.backgroundColor = backgroundColor;
     containerEl.style.backgroundColor = backgroundColor;
 
-    const useSevenSegment = (displayStyle === "7-segment" || displayStyle === "7segment");
+    var useSevenSegment = (displayStyle === "7-segment" || displayStyle === "7segment");
 
-    // ---- Unit flags ----
-    const wantDays = displayType.indexOf("days") !== -1;
-    const wantHours = displayType.indexOf("hours") !== -1;
-    const wantMinutes = displayType.indexOf("minutes") !== -1;
-    const wantSeconds = displayType.indexOf("seconds") !== -1;
-    const wantMillis = displayType.indexOf("miliseconds") !== -1
-                    || displayType.indexOf("milliseconds") !== -1;
+    var wantDays = displayType.indexOf("days") !== -1;
+    var wantHours = displayType.indexOf("hours") !== -1;
+    var wantMinutes = displayType.indexOf("minutes") !== -1;
+    var wantSeconds = displayType.indexOf("seconds") !== -1;
+    var wantMillis = displayType.indexOf("miliseconds") !== -1
+                  || displayType.indexOf("milliseconds") !== -1;
 
     if (!wantDays && !wantHours && !wantMinutes && !wantSeconds && !wantMillis) {
       console.warn("[stopwatch] no valid displayType units; defaulting to seconds");
+      wantSeconds = true;
     }
 
     function pad(num, size) {
@@ -130,16 +176,10 @@
 
     function formatElapsed(totalMs) {
       if (totalMs < 0) totalMs = 0;
-
-      var msPerDay = 86400000;
-      var msPerHour = 3600000;
-      var msPerMinute = 60000;
-      var msPerSecond = 1000;
-
+      var msPerDay = 86400000, msPerHour = 3600000, msPerMinute = 60000, msPerSecond = 1000;
       var days = 0, hours = 0, minutes = 0, seconds = 0, millis = 0;
       var r = totalMs;
 
-      // Highest enabled unit absorbs all overflow above it.
       if (wantDays) {
         days = Math.floor(r / msPerDay); r -= days * msPerDay;
         if (wantHours) { hours = Math.floor(r / msPerHour); r -= hours * msPerHour; }
@@ -161,7 +201,6 @@
       } else if (wantMillis) {
         millis = Math.floor(r);
       } else {
-        // fallback: seconds
         seconds = Math.floor(r / msPerSecond);
       }
 
@@ -181,7 +220,7 @@
     }
 
     // =========================================================
-    //  SEVEN-SEGMENT SVG RENDERER (no external dependencies)
+    //  SEGMENT GEOMETRY (shared by SVG live view and canvas export)
     // =========================================================
     var SEGMENT_MAP = {
       "0": ["a", "b", "c", "d", "e", "f"],
@@ -196,34 +235,38 @@
       "9": ["a", "b", "c", "d", "f", "g"]
     };
 
-    var DIGIT_WIDTH = 60;
-    var DIGIT_HEIGHT = 100;
-    var T = 10;   // segment thickness
-    var G = 2;    // gap
-
-    function segmentPolygons() {
-      var w = DIGIT_WIDTH;
-      var h = DIGIT_HEIGHT;
-      var midY = h / 2;
-      return {
-        a: [G + T / 2, G, w - T / 2 - G, G, w - T - G, T + G, T + G, T + G].join(","),
-        g: [G + T / 2, midY, w - T / 2 - G, midY, w - T - G, midY + T / 2, T + G, midY + T / 2, G, midY, T + G, midY - T / 2, w - T - G, midY - T / 2, w - T / 2 - G, midY].join(","),
-        d: [G + T / 2, h - G, w - T / 2 - G, h - G, w - T - G, h - T - G, T + G, h - T - G].join(","),
-        f: [G, G + T / 2, T + G, T + G, T + G, midY - T / 2 - G, G, midY - G].join(","),
-        b: [w - G, G + T / 2, w - T - G, T + G, w - T - G, midY - T / 2 - G, w - G, midY - G].join(","),
-        e: [G, midY + G, T + G, midY + T / 2 + G, T + G, h - T - G, G, h - T / 2 - G].join(","),
-        c: [w - G, midY + G, w - T - G, midY + T / 2 + G, w - T - G, h - T - G, w - G, h - T / 2 - G].join(",")
-      };
-    }
-
-    var POLYS = segmentPolygons();
+    var DIGIT_WIDTH = 60, DIGIT_HEIGHT = 100, T = 10, G = 2;
     var ALL_SEGMENTS = ["a", "b", "c", "d", "e", "f", "g"];
-    var COLON_WIDTH = 26;
-    var DOT_WIDTH = 34;
-    var SPACING = 12;
+    var COLON_WIDTH = 26, DOT_WIDTH = 34, SPACING = 12;
     var OFF_OPACITY = 0.12;
     var SVG_NS = "http://www.w3.org/2000/svg";
 
+    // Point arrays (used directly by canvas; joined to strings for SVG).
+    function segmentPointArrays() {
+      var w = DIGIT_WIDTH, h = DIGIT_HEIGHT, midY = h / 2;
+      return {
+        a: [[G + T / 2, G], [w - T / 2 - G, G], [w - T - G, T + G], [T + G, T + G]],
+        g: [[G + T / 2, midY], [w - T / 2 - G, midY], [w - T - G, midY + T / 2], [T + G, midY + T / 2], [G, midY], [T + G, midY - T / 2], [w - T - G, midY - T / 2], [w - T / 2 - G, midY]],
+        d: [[G + T / 2, h - G], [w - T / 2 - G, h - G], [w - T - G, h - T - G], [T + G, h - T - G]],
+        f: [[G, G + T / 2], [T + G, T + G], [T + G, midY - T / 2 - G], [G, midY - G]],
+        b: [[w - G, G + T / 2], [w - T - G, T + G], [w - T - G, midY - T / 2 - G], [w - G, midY - G]],
+        e: [[G, midY + G], [T + G, midY + T / 2 + G], [T + G, h - T - G], [G, h - T / 2 - G]],
+        c: [[w - G, midY + G], [w - T - G, midY + T / 2 + G], [w - T - G, h - T - G], [w - G, h - T / 2 - G]]
+      };
+    }
+
+    var POINT_ARRAYS = segmentPointArrays();
+    var POLYS = (function () {
+      var out = {};
+      for (var k in POINT_ARRAYS) {
+        if (POINT_ARRAYS.hasOwnProperty(k)) {
+          out[k] = POINT_ARRAYS[k].map(function (p) { return p[0] + "," + p[1]; }).join(" ");
+        }
+      }
+      return out;
+    })();
+
+    // ---- Live SVG seven-segment renderer ----
     var cellRefs = [];
     var currentLayout = "";
 
@@ -237,8 +280,8 @@
     }
 
     function buildSvgLayout(text) {
-      var totalWidth = 0;
-      for (var i = 0; i < text.length; i++) {
+      var totalWidth = 0, i;
+      for (i = 0; i < text.length; i++) {
         var ch = text[i];
         if (ch >= "0" && ch <= "9") totalWidth += DIGIT_WIDTH + SPACING;
         else if (ch === ":") totalWidth += COLON_WIDTH + SPACING;
@@ -272,10 +315,10 @@
         } else if (c === ":") {
           var cx = x + COLON_WIDTH / 2;
           var fracs = [0.33, 0.67];
-          for (var f = 0; f < fracs.length; f++) {
+          for (var fI = 0; fI < fracs.length; fI++) {
             var dot = document.createElementNS(SVG_NS, "rect");
             dot.setAttribute("x", cx - T / 2);
-            dot.setAttribute("y", DIGIT_HEIGHT * fracs[f] - T / 2);
+            dot.setAttribute("y", DIGIT_HEIGHT * fracs[fI] - T / 2);
             dot.setAttribute("width", T);
             dot.setAttribute("height", T);
             dot.setAttribute("fill", color);
@@ -296,7 +339,6 @@
         }
       }
       currentLayout = layoutSignature(text);
-      console.log("[stopwatch] rebuilt SVG layout for", JSON.stringify(text), "cells:", cellRefs.length);
     }
 
     function updateSegments(text) {
@@ -320,18 +362,13 @@
     }
 
     function renderSevenSegment(text) {
-      if (layoutSignature(text) !== currentLayout) {
-        buildSvgLayout(text);
-      }
+      if (layoutSignature(text) !== currentLayout) buildSvgLayout(text);
       updateSegments(text);
     }
 
-    // =========================================================
-    //  DIGITAL RENDERER
-    // =========================================================
+    // ---- Digital renderer ----
     function sizeDigitalFont() {
-      var vw = window.innerWidth;
-      var vh = window.innerHeight;
+      var vw = window.innerWidth, vh = window.innerHeight;
       var charCount = Math.max(digitalEl.textContent.length, 6);
       var byWidth = (vw * 0.9) / (charCount * 0.62);
       var byHeight = vh * 0.6;
@@ -339,57 +376,244 @@
       digitalEl.style.fontSize = fontSize + "px";
     }
 
-    // ---- Render loop ----
+    // ---- Live render loop ----
     var lastText = "";
-
     function draw() {
       var elapsedMs = Date.now() - baselineMs;
       var text = formatElapsed(elapsedMs);
       if (text === lastText) return;
-
-      if (useSevenSegment) {
-        renderSevenSegment(text);
-      } else {
+      if (useSevenSegment) renderSevenSegment(text);
+      else {
         digitalEl.textContent = text;
         if (text.length !== lastText.length) sizeDigitalFont();
       }
       lastText = text;
     }
-
-    function tickRAF() {
-      draw();
-      requestAnimationFrame(tickRAF);
-    }
-
+    function tickRAF() { draw(); requestAnimationFrame(tickRAF); }
     function startLoop() {
-      if (wantMillis) {
-        console.log("[stopwatch] loop mode: requestAnimationFrame (millis)");
-        requestAnimationFrame(tickRAF);
-      } else {
-        console.log("[stopwatch] loop mode: setInterval 250ms");
-        draw();
-        setInterval(draw, 250);
-      }
+      if (wantMillis) { requestAnimationFrame(tickRAF); }
+      else { draw(); setInterval(draw, 250); }
     }
 
-    // ---- Init ----
     if (useSevenSegment) {
-      console.log("[stopwatch] renderer: 7-segment SVG");
       svgEl.classList.remove("hidden");
       digitalEl.classList.add("hidden");
     } else {
-      console.log("[stopwatch] renderer: digital");
       digitalEl.classList.remove("hidden");
       svgEl.classList.add("hidden");
       digitalEl.style.color = color;
       digitalEl.style.fontFamily = displayFont ? (displayFont + ", monospace") : "monospace";
     }
-
-    window.addEventListener("resize", function () {
-      if (!useSevenSegment) sizeDigitalFont();
-    });
-
+    window.addEventListener("resize", function () { if (!useSevenSegment) sizeDigitalFont(); });
     startLoop();
+
+    // =========================================================
+    //  CANVAS FRAME RENDERER (for GIF export)
+    // =========================================================
+    // Measures the natural pixel width of the formatted string in segment
+    // units, then scales to fit within the requested GIF width/height while
+    // preserving aspect ratio and centering.
+    function measureUnitsWidth(text) {
+      var w = 0;
+      for (var i = 0; i < text.length; i++) {
+        var ch = text[i];
+        if (ch >= "0" && ch <= "9") w += DIGIT_WIDTH + SPACING;
+        else if (ch === ":") w += COLON_WIDTH + SPACING;
+        else if (ch === ".") w += DOT_WIDTH + SPACING;
+      }
+      w -= SPACING;
+      return w < 1 ? 1 : w;
+    }
+
+    function drawSegmentPolygon(ctx, pts, fillStyle, alpha) {
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = fillStyle;
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Renders one frame's text onto ctx sized (canvasW x canvasH).
+    function renderFrameToCanvas(ctx, canvasW, canvasH, text) {
+      ctx.save();
+      ctx.fillStyle = backgroundColor;
+      ctx.fillRect(0, 0, canvasW, canvasH);
+
+      if (useSevenSegment) {
+        var unitsW = measureUnitsWidth(text);
+        var unitsH = DIGIT_HEIGHT;
+        // Scale to fit with a small margin (0.9).
+        var scale = Math.min((canvasW * 0.9) / unitsW, (canvasH * 0.9) / unitsH);
+        var drawW = unitsW * scale, drawH = unitsH * scale;
+        var offsetX = (canvasW - drawW) / 2;
+        var offsetY = (canvasH - drawH) / 2;
+
+        ctx.translate(offsetX, offsetY);
+        ctx.scale(scale, scale);
+
+        var x = 0;
+        for (var i = 0; i < text.length; i++) {
+          var ch = text[i];
+          if (ch >= "0" && ch <= "9") {
+            var litSet = SEGMENT_MAP[ch];
+            ctx.save();
+            ctx.translate(x, 0);
+            for (var k = 0; k < ALL_SEGMENTS.length; k++) {
+              var seg = ALL_SEGMENTS[k];
+              var lit = litSet.indexOf(seg) !== -1;
+              drawSegmentPolygon(ctx, POINT_ARRAYS[seg], color, lit ? 1 : OFF_OPACITY);
+            }
+            ctx.restore();
+            x += DIGIT_WIDTH + SPACING;
+          } else if (ch === ":") {
+            var cx = x + COLON_WIDTH / 2;
+            var fracs = [0.33, 0.67];
+            for (var fI = 0; fI < fracs.length; fI++) {
+              ctx.fillStyle = color;
+              ctx.globalAlpha = 1;
+              ctx.fillRect(cx - T / 2, DIGIT_HEIGHT * fracs[fI] - T / 2, T, T);
+            }
+            x += COLON_WIDTH + SPACING;
+          } else if (ch === ".") {
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 1;
+            ctx.fillRect(x + DOT_WIDTH / 2 - T / 2, DIGIT_HEIGHT - T, T, T);
+            x += DOT_WIDTH + SPACING;
+          }
+        }
+      } else {
+        // Digital: fit font to canvas.
+        var fontFamily = displayFont ? (displayFont + ", monospace") : "monospace";
+        var fontSize = Math.min(canvasH * 0.7, (canvasW * 0.9) / (Math.max(text.length, 1) * 0.62));
+        ctx.fillStyle = color;
+        ctx.font = "bold " + fontSize + "px " + fontFamily;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, canvasW / 2, canvasH / 2);
+      }
+      ctx.restore();
+    }
+
+    // =========================================================
+    //  GIF EXPORT
+    // =========================================================
+    var GIFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js";
+    var GIFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js";
+    var gifLibLoading = null;
+
+    function loadGifLib() {
+      if (window.GIF) return Promise.resolve();
+      if (gifLibLoading) return gifLibLoading;
+      gifLibLoading = new Promise(function (resolve, reject) {
+        var s = document.createElement("script");
+        s.src = GIFJS_URL;
+        s.onload = function () { console.log("[stopwatch] gif.js loaded"); resolve(); };
+        s.onerror = function () { reject(new Error("failed to load gif.js from CDN")); };
+        document.head.appendChild(s);
+      });
+      return gifLibLoading;
+    }
+
+    // Generates a GIF where frame N (0-based) shows the stopwatch at
+    // (startFrom + N) seconds. One frame per second, 1000ms delay each.
+    function exportGif(onProgress) {
+      return loadGifLib().then(function () {
+        return new Promise(function (resolve, reject) {
+          var gif = new window.GIF({
+            workers: 2,
+            quality: 10,
+            width: gifWidth,
+            height: gifHeight,
+            workerScript: GIFJS_WORKER_URL,
+            background: backgroundColor,
+            repeat: 0
+          });
+
+          var canvas = document.createElement("canvas");
+          canvas.width = gifWidth;
+          canvas.height = gifHeight;
+          var ctx = canvas.getContext("2d");
+
+          console.log("[stopwatch] rendering", frameCount, "frames at", gifWidth + "x" + gifHeight);
+          for (var n = 0; n < frameCount; n++) {
+            var elapsedMs = (startFrom + n) * 1000;
+            var text = formatElapsed(elapsedMs);
+            renderFrameToCanvas(ctx, gifWidth, gifHeight, text);
+            gif.addFrame(ctx, { copy: true, delay: 1000 });
+          }
+
+          gif.on("progress", function (p) {
+            if (onProgress) onProgress(p);
+          });
+          gif.on("finished", function (blob) {
+            console.log("[stopwatch] GIF finished, bytes:", blob.size);
+            resolve(blob);
+          });
+          gif.on("abort", function () { reject(new Error("gif render aborted")); });
+
+          gif.render();
+        });
+      });
+    }
+
+    function downloadBlob(blob, filename) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    // Expose a programmatic hook so the export can be triggered from the
+    // Apps Script overlay or console without the UI.
+    window.stopwatchExportGif = function () {
+      return exportGif(function (p) {
+        console.log("[stopwatch] encoding", Math.round(p * 100) + "%");
+      }).then(function (blob) {
+        downloadBlob(blob, "stopwatch.gif");
+        return blob;
+      });
+    };
+
+    // ---- Optional export UI ----
+    // Shown when ?export=1 (or ?showExport=1) is present, so the plain
+    // embedded stopwatch stays clean by default.
+    var showExport = params.get("export") === "1" || params.get("showExport") === "1";
+    if (showExport) {
+      var bar = document.createElement("div");
+      bar.id = "exportBar";
+      var btn = document.createElement("button");
+      btn.textContent = "Download GIF";
+      var status = document.createElement("span");
+      status.id = "exportStatus";
+      status.textContent = frameCount + " frames \u00b7 " + gifWidth + "\u00d7" + gifHeight;
+      bar.appendChild(btn);
+      bar.appendChild(status);
+      document.body.appendChild(bar);
+
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        status.textContent = "Rendering\u2026";
+        exportGif(function (p) {
+          status.textContent = "Encoding " + Math.round(p * 100) + "%";
+        }).then(function (blob) {
+          downloadBlob(blob, "stopwatch.gif");
+          status.textContent = "Done \u00b7 " + Math.round(blob.size / 1024) + " KB";
+          btn.disabled = false;
+        }).catch(function (err) {
+          console.error("[stopwatch] export failed:", err && err.message);
+          status.textContent = "Export failed (see console)";
+          btn.disabled = false;
+        });
+      });
+    }
+
     console.log("[stopwatch] boot complete");
 
   } catch (err) {
