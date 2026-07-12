@@ -20,7 +20,6 @@
     width: 100vw;
     box-sizing: border-box;
   }
-  /* Digital (regular numerals) display */
   #digitalDisplay {
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.05em;
@@ -28,7 +27,6 @@
     line-height: 1;
     user-select: none;
   }
-  /* SVG seven-segment display fills available space */
   #segmentDisplay {
     width: 90vw;
     height: 60vh;
@@ -47,115 +45,357 @@
 (function () {
   "use strict";
 
-  // ---- Parse URL parameters ----
-  const params = new URLSearchParams(window.location.search);
+  // Global error trap: if anything throws, we see it in the console instead
+  // of a silent blank page.
+  window.addEventListener("error", function (e) {
+    console.error("[stopwatch] uncaught error:", e.message, "at", e.filename + ":" + e.lineno);
+  });
 
-  function getInt(key, fallback) {
-    const raw = params.get(key);
-    if (raw === null || raw === "") return fallback;
-    const value = parseInt(raw, 10);
-    return Number.isFinite(value) ? value : fallback;
-  }
+  try {
+    console.log("[stopwatch] boot start");
 
-  const startFrom = getInt("startFrom", 0);
-  const displayTypeRaw = params.get("displayType") || "hours,minutes,seconds";
-  const displayType = displayTypeRaw
-    .split(",")
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean);
+    // ---- Parse URL parameters ----
+    const params = new URLSearchParams(window.location.search);
 
-  const startTimeParam = getInt("startTime", null);
-  const displayStyle = (params.get("displayStyle") || "digital").toLowerCase();
-  const displayFont = params.get("displayFont");
-  const backgroundColor = params.get("backgroundColor") || "#000000";
-  const color = params.get("color") || "#ffffff";
-
-  // ---- Reference epoch (ms) ----
-  const nowMs = Date.now();
-  const anchorMs = (startTimeParam !== null) ? (startTimeParam * 1000) : nowMs;
-  const baselineMs = anchorMs - (startFrom * 1000);
-
-  // ---- Elements & styling ----
-  const bodyEl = document.body;
-  const containerEl = document.getElementById("stopwatchContainer");
-  const digitalEl = document.getElementById("digitalDisplay");
-  const svgEl = document.getElementById("segmentDisplay");
-
-  bodyEl.style.backgroundColor = backgroundColor;
-  containerEl.style.backgroundColor = backgroundColor;
-
-  const useSevenSegment = (displayStyle === "7-segment" || displayStyle === "7segment");
-
-  // ---- Unit flags ----
-  const wantDays = displayType.includes("days");
-  const wantHours = displayType.includes("hours");
-  const wantMinutes = displayType.includes("minutes");
-  const wantSeconds = displayType.includes("seconds");
-  const wantMillis = displayType.includes("miliseconds")
-                  || displayType.includes("milliseconds");
-
-  function pad(num, size) {
-    let s = String(num);
-    while (s.length < size) s = "0" + s;
-    return s;
-  }
-
-  function formatElapsed(totalMs) {
-    if (totalMs < 0) totalMs = 0;
-
-    const msPerDay = 86400000;
-    const msPerHour = 3600000;
-    const msPerMinute = 60000;
-    const msPerSecond = 1000;
-
-    let days = 0, hours = 0, minutes = 0, seconds = 0, millis = 0;
-    let r = totalMs;
-
-    // Highest enabled unit absorbs all overflow above it.
-    if (wantDays) {
-      days = Math.floor(r / msPerDay); r -= days * msPerDay;
-      if (wantHours) { hours = Math.floor(r / msPerHour); r -= hours * msPerHour; }
-      if (wantMinutes) { minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute; }
-      if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
-      if (wantMillis) { millis = Math.floor(r); }
-    } else if (wantHours) {
-      hours = Math.floor(r / msPerHour); r -= hours * msPerHour;
-      if (wantMinutes) { minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute; }
-      if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
-      if (wantMillis) { millis = Math.floor(r); }
-    } else if (wantMinutes) {
-      minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute;
-      if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
-      if (wantMillis) { millis = Math.floor(r); }
-    } else if (wantSeconds) {
-      seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond;
-      if (wantMillis) { millis = Math.floor(r); }
-    } else if (wantMillis) {
-      millis = Math.floor(r);
+    function getInt(key, fallback) {
+      const raw = params.get(key);
+      if (raw === null || raw === "") return fallback;
+      const value = parseInt(raw, 10);
+      return Number.isFinite(value) ? value : fallback;
     }
 
-    const parts = [];
-    if (wantDays) parts.push(pad(days, 2));
-    if (wantHours) parts.push(pad(hours, 2));
-    if (wantMinutes) parts.push(pad(minutes, 2));
-    if (wantSeconds) parts.push(pad(seconds, 2));
+    const startFrom = getInt("startFrom", 0);
+    const displayTypeRaw = params.get("displayType") || "hours,minutes,seconds";
+    const displayType = displayTypeRaw
+      .split(",")
+      .map(function (s) { return s.trim().toLowerCase(); })
+      .filter(Boolean);
 
-    let text = parts.join(":");
-    if (wantMillis) {
-      const ms = pad(millis, 3);
-      text = text.length ? (text + "." + ms) : ms;
+    const startTimeParam = getInt("startTime", null);
+    const displayStyle = (params.get("displayStyle") || "digital").toLowerCase();
+    const displayFont = params.get("displayFont");
+    const backgroundColor = params.get("backgroundColor") || "#000000";
+    const color = params.get("color") || "#ffffff";
+
+    console.log("[stopwatch] params:", {
+      startFrom: startFrom,
+      displayType: displayType,
+      startTime: startTimeParam,
+      displayStyle: displayStyle,
+      displayFont: displayFont,
+      backgroundColor: backgroundColor,
+      color: color
+    });
+
+    // ---- Reference epoch (ms) ----
+    const nowMs = Date.now();
+    const anchorMs = (startTimeParam !== null) ? (startTimeParam * 1000) : nowMs;
+    const baselineMs = anchorMs - (startFrom * 1000);
+
+    // ---- Elements ----
+    const bodyEl = document.body;
+    const containerEl = document.getElementById("stopwatchContainer");
+    const digitalEl = document.getElementById("digitalDisplay");
+    const svgEl = document.getElementById("segmentDisplay");
+
+    if (!containerEl || !digitalEl || !svgEl) {
+      console.error("[stopwatch] missing DOM elements", {
+        containerEl: !!containerEl, digitalEl: !!digitalEl, svgEl: !!svgEl
+      });
+      return;
     }
-    if (!text.length) text = "0";
-    return text;
-  }
 
-  // =========================================================
-  //  SEVEN-SEGMENT SVG RENDERER (no external dependencies)
-  // =========================================================
-  // Segment layout per digit:
-  //        a
-  //      -----
-  //   f |     | b
-  //     |  g  |
-  //      -----
-  //   e |     | c
+    bodyEl.style.backgroundColor = backgroundColor;
+    containerEl.style.backgroundColor = backgroundColor;
+
+    const useSevenSegment = (displayStyle === "7-segment" || displayStyle === "7segment");
+
+    // ---- Unit flags ----
+    const wantDays = displayType.indexOf("days") !== -1;
+    const wantHours = displayType.indexOf("hours") !== -1;
+    const wantMinutes = displayType.indexOf("minutes") !== -1;
+    const wantSeconds = displayType.indexOf("seconds") !== -1;
+    const wantMillis = displayType.indexOf("miliseconds") !== -1
+                    || displayType.indexOf("milliseconds") !== -1;
+
+    if (!wantDays && !wantHours && !wantMinutes && !wantSeconds && !wantMillis) {
+      console.warn("[stopwatch] no valid displayType units; defaulting to seconds");
+    }
+
+    function pad(num, size) {
+      var s = String(num);
+      while (s.length < size) s = "0" + s;
+      return s;
+    }
+
+    function formatElapsed(totalMs) {
+      if (totalMs < 0) totalMs = 0;
+
+      var msPerDay = 86400000;
+      var msPerHour = 3600000;
+      var msPerMinute = 60000;
+      var msPerSecond = 1000;
+
+      var days = 0, hours = 0, minutes = 0, seconds = 0, millis = 0;
+      var r = totalMs;
+
+      // Highest enabled unit absorbs all overflow above it.
+      if (wantDays) {
+        days = Math.floor(r / msPerDay); r -= days * msPerDay;
+        if (wantHours) { hours = Math.floor(r / msPerHour); r -= hours * msPerHour; }
+        if (wantMinutes) { minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute; }
+        if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
+        if (wantMillis) { millis = Math.floor(r); }
+      } else if (wantHours) {
+        hours = Math.floor(r / msPerHour); r -= hours * msPerHour;
+        if (wantMinutes) { minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute; }
+        if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
+        if (wantMillis) { millis = Math.floor(r); }
+      } else if (wantMinutes) {
+        minutes = Math.floor(r / msPerMinute); r -= minutes * msPerMinute;
+        if (wantSeconds) { seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond; }
+        if (wantMillis) { millis = Math.floor(r); }
+      } else if (wantSeconds) {
+        seconds = Math.floor(r / msPerSecond); r -= seconds * msPerSecond;
+        if (wantMillis) { millis = Math.floor(r); }
+      } else if (wantMillis) {
+        millis = Math.floor(r);
+      } else {
+        // fallback: seconds
+        seconds = Math.floor(r / msPerSecond);
+      }
+
+      var parts = [];
+      if (wantDays) parts.push(pad(days, 2));
+      if (wantHours) parts.push(pad(hours, 2));
+      if (wantMinutes) parts.push(pad(minutes, 2));
+      if (wantSeconds) parts.push(pad(seconds, 2));
+
+      var text = parts.join(":");
+      if (wantMillis) {
+        var ms = pad(millis, 3);
+        text = text.length ? (text + "." + ms) : ms;
+      }
+      if (!text.length) text = pad(seconds, 2);
+      return text;
+    }
+
+    // =========================================================
+    //  SEVEN-SEGMENT SVG RENDERER (no external dependencies)
+    // =========================================================
+    var SEGMENT_MAP = {
+      "0": ["a", "b", "c", "d", "e", "f"],
+      "1": ["b", "c"],
+      "2": ["a", "b", "g", "e", "d"],
+      "3": ["a", "b", "g", "c", "d"],
+      "4": ["f", "g", "b", "c"],
+      "5": ["a", "f", "g", "c", "d"],
+      "6": ["a", "f", "g", "e", "c", "d"],
+      "7": ["a", "b", "c"],
+      "8": ["a", "b", "c", "d", "e", "f", "g"],
+      "9": ["a", "b", "c", "d", "f", "g"]
+    };
+
+    var DIGIT_WIDTH = 60;
+    var DIGIT_HEIGHT = 100;
+    var T = 10;   // segment thickness
+    var G = 2;    // gap
+
+    function segmentPolygons() {
+      var w = DIGIT_WIDTH;
+      var h = DIGIT_HEIGHT;
+      var midY = h / 2;
+      return {
+        a: [G + T / 2, G, w - T / 2 - G, G, w - T - G, T + G, T + G, T + G].join(","),
+        g: [G + T / 2, midY, w - T / 2 - G, midY, w - T - G, midY + T / 2, T + G, midY + T / 2, G, midY, T + G, midY - T / 2, w - T - G, midY - T / 2, w - T / 2 - G, midY].join(","),
+        d: [G + T / 2, h - G, w - T / 2 - G, h - G, w - T - G, h - T - G, T + G, h - T - G].join(","),
+        f: [G, G + T / 2, T + G, T + G, T + G, midY - T / 2 - G, G, midY - G].join(","),
+        b: [w - G, G + T / 2, w - T - G, T + G, w - T - G, midY - T / 2 - G, w - G, midY - G].join(","),
+        e: [G, midY + G, T + G, midY + T / 2 + G, T + G, h - T - G, G, h - T / 2 - G].join(","),
+        c: [w - G, midY + G, w - T - G, midY + T / 2 + G, w - T - G, h - T - G, w - G, h - T / 2 - G].join(",")
+      };
+    }
+
+    var POLYS = segmentPolygons();
+    var ALL_SEGMENTS = ["a", "b", "c", "d", "e", "f", "g"];
+    var COLON_WIDTH = 26;
+    var DOT_WIDTH = 34;
+    var SPACING = 12;
+    var OFF_OPACITY = 0.12;
+    var SVG_NS = "http://www.w3.org/2000/svg";
+
+    var cellRefs = [];
+    var currentLayout = "";
+
+    function layoutSignature(text) {
+      var sig = "";
+      for (var i = 0; i < text.length; i++) {
+        var ch = text[i];
+        sig += (ch >= "0" && ch <= "9") ? "D" : ch;
+      }
+      return sig;
+    }
+
+    function buildSvgLayout(text) {
+      var totalWidth = 0;
+      for (var i = 0; i < text.length; i++) {
+        var ch = text[i];
+        if (ch >= "0" && ch <= "9") totalWidth += DIGIT_WIDTH + SPACING;
+        else if (ch === ":") totalWidth += COLON_WIDTH + SPACING;
+        else if (ch === ".") totalWidth += DOT_WIDTH + SPACING;
+      }
+      totalWidth -= SPACING;
+      if (totalWidth < 1) totalWidth = 1;
+
+      svgEl.setAttribute("viewBox", "0 0 " + totalWidth + " " + DIGIT_HEIGHT);
+      while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+      cellRefs = [];
+
+      var x = 0;
+      for (var j = 0; j < text.length; j++) {
+        var c = text[j];
+        if (c >= "0" && c <= "9") {
+          var group = document.createElementNS(SVG_NS, "g");
+          group.setAttribute("transform", "translate(" + x + ",0)");
+          var segEls = {};
+          for (var k = 0; k < ALL_SEGMENTS.length; k++) {
+            var seg = ALL_SEGMENTS[k];
+            var poly = document.createElementNS(SVG_NS, "polygon");
+            poly.setAttribute("points", POLYS[seg]);
+            poly.setAttribute("fill", color);
+            group.appendChild(poly);
+            segEls[seg] = poly;
+          }
+          svgEl.appendChild(group);
+          cellRefs.push({ type: "digit", segEls: segEls });
+          x += DIGIT_WIDTH + SPACING;
+        } else if (c === ":") {
+          var cx = x + COLON_WIDTH / 2;
+          var fracs = [0.33, 0.67];
+          for (var f = 0; f < fracs.length; f++) {
+            var dot = document.createElementNS(SVG_NS, "rect");
+            dot.setAttribute("x", cx - T / 2);
+            dot.setAttribute("y", DIGIT_HEIGHT * fracs[f] - T / 2);
+            dot.setAttribute("width", T);
+            dot.setAttribute("height", T);
+            dot.setAttribute("fill", color);
+            svgEl.appendChild(dot);
+          }
+          cellRefs.push({ type: "colon" });
+          x += COLON_WIDTH + SPACING;
+        } else if (c === ".") {
+          var pdot = document.createElementNS(SVG_NS, "rect");
+          pdot.setAttribute("x", x + DOT_WIDTH / 2 - T / 2);
+          pdot.setAttribute("y", DIGIT_HEIGHT - T);
+          pdot.setAttribute("width", T);
+          pdot.setAttribute("height", T);
+          pdot.setAttribute("fill", color);
+          svgEl.appendChild(pdot);
+          cellRefs.push({ type: "dot" });
+          x += DOT_WIDTH + SPACING;
+        }
+      }
+      currentLayout = layoutSignature(text);
+      console.log("[stopwatch] rebuilt SVG layout for", JSON.stringify(text), "cells:", cellRefs.length);
+    }
+
+    function updateSegments(text) {
+      var cellIndex = 0;
+      for (var i = 0; i < text.length; i++) {
+        var ch = text[i];
+        var cell = cellRefs[cellIndex];
+        if (!cell) break;
+        if (ch >= "0" && ch <= "9") {
+          var litSet = SEGMENT_MAP[ch];
+          for (var k = 0; k < ALL_SEGMENTS.length; k++) {
+            var seg = ALL_SEGMENTS[k];
+            cell.segEls[seg].setAttribute(
+              "opacity",
+              litSet.indexOf(seg) !== -1 ? "1" : String(OFF_OPACITY)
+            );
+          }
+        }
+        cellIndex++;
+      }
+    }
+
+    function renderSevenSegment(text) {
+      if (layoutSignature(text) !== currentLayout) {
+        buildSvgLayout(text);
+      }
+      updateSegments(text);
+    }
+
+    // =========================================================
+    //  DIGITAL RENDERER
+    // =========================================================
+    function sizeDigitalFont() {
+      var vw = window.innerWidth;
+      var vh = window.innerHeight;
+      var charCount = Math.max(digitalEl.textContent.length, 6);
+      var byWidth = (vw * 0.9) / (charCount * 0.62);
+      var byHeight = vh * 0.6;
+      var fontSize = Math.max(12, Math.min(byWidth, byHeight));
+      digitalEl.style.fontSize = fontSize + "px";
+    }
+
+    // ---- Render loop ----
+    var lastText = "";
+
+    function draw() {
+      var elapsedMs = Date.now() - baselineMs;
+      var text = formatElapsed(elapsedMs);
+      if (text === lastText) return;
+
+      if (useSevenSegment) {
+        renderSevenSegment(text);
+      } else {
+        digitalEl.textContent = text;
+        if (text.length !== lastText.length) sizeDigitalFont();
+      }
+      lastText = text;
+    }
+
+    function tickRAF() {
+      draw();
+      requestAnimationFrame(tickRAF);
+    }
+
+    function startLoop() {
+      if (wantMillis) {
+        console.log("[stopwatch] loop mode: requestAnimationFrame (millis)");
+        requestAnimationFrame(tickRAF);
+      } else {
+        console.log("[stopwatch] loop mode: setInterval 250ms");
+        draw();
+        setInterval(draw, 250);
+      }
+    }
+
+    // ---- Init ----
+    if (useSevenSegment) {
+      console.log("[stopwatch] renderer: 7-segment SVG");
+      svgEl.classList.remove("hidden");
+      digitalEl.classList.add("hidden");
+    } else {
+      console.log("[stopwatch] renderer: digital");
+      digitalEl.classList.remove("hidden");
+      svgEl.classList.add("hidden");
+      digitalEl.style.color = color;
+      digitalEl.style.fontFamily = displayFont ? (displayFont + ", monospace") : "monospace";
+    }
+
+    window.addEventListener("resize", function () {
+      if (!useSevenSegment) sizeDigitalFont();
+    });
+
+    startLoop();
+    console.log("[stopwatch] boot complete");
+
+  } catch (err) {
+    console.error("[stopwatch] fatal init error:", err && err.message, err && err.stack);
+  }
+})();
+</script>
+</body>
+</html>
