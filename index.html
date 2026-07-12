@@ -574,9 +574,18 @@
           canvas.height = gifHeight;
           var ctx = canvas.getContext("2d");
 
-          console.log("[stopwatch] rendering", frameCount, "frames at", gifWidth + "x" + gifHeight);
+          // Capture the timer's current elapsed value at export time so the
+          // GIF begins at whatever the stopwatch reads now (this already
+          // includes startFrom plus any wall-clock time since the anchor),
+          // rather than restarting from zero. Floored to whole seconds so
+          // frame 0 matches the on-screen value.
+          var startElapsedSeconds = Math.floor((Date.now() - baselineMs) / 1000);
+          if (startElapsedSeconds < 0) startElapsedSeconds = 0;
+
+          console.log("[stopwatch] rendering", frameCount, "frames at",
+            gifWidth + "x" + gifHeight, "starting from", startElapsedSeconds + "s");
           for (var n = 0; n < frameCount; n++) {
-            var elapsedMs = (startFrom + n) * 1000;
+            var elapsedMs = (startElapsedSeconds + n) * 1000;
             var text = formatElapsed(elapsedMs);
             renderFrameToCanvas(ctx, gifWidth, gifHeight, text);
             gif.addFrame(ctx, { copy: true, delay: 1000 });
@@ -648,6 +657,19 @@
           status.textContent = "Export failed (see console)";
           btn.disabled = false;
         });
+      });
+    }
+
+    // ---- Auto-download on load ----
+    // When ?autoDownload=1 (or ?download=1) is present, kick off the export
+    // and download automatically once the page is ready, with no click needed.
+    var autoDownload = params.get("autoDownload") === "1" || params.get("download") === "1";
+    if (autoDownload) {
+      console.log("[stopwatch] auto-download requested");
+      window.stopwatchExportGif().then(function () {
+        console.log("[stopwatch] auto-download complete");
+      }).catch(function (err) {
+        console.error("[stopwatch] auto-download failed:", err && err.message);
       });
     }
 
